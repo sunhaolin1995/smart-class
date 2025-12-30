@@ -1,0 +1,7 @@
+streamlit
+python-docx
+langchain
+langchain-core
+langchain-community
+langchain-openai
+openai
