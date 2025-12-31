@@ -3,36 +3,73 @@ import os
 from docx import Document
 from docx.shared import Pt
 import json
+import time
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from io import BytesIO
 
 # --- Configuration ---
-st.set_page_config(page_title="AI 智能教案生成器", layout="wide")
+st.set_page_config(page_title="AI 智能教案生成器 (V2 Pro)", layout="wide", initial_sidebar_state="expanded")
 
-# --- Helper Functions ---
+# --- UI Components: Console Logger ---
+class ConsoleLogger:
+    def __init__(self):
+        self.container = st.empty()
+        self.logs = []
 
-def get_table_structure(doc):
+    def log(self, message, icon="🤖"):
+        timestamp = time.strftime("%H:%M:%S")
+        self.logs.append(f"`{timestamp}` {icon} {message}")
+        with self.container.container():
+            with st.expander("🖥️ AI 运行终端 (实时日志)", expanded=True):
+                for log in self.logs[-5:]: # Show last 5 logs
+                    st.markdown(log)
+    
+    def clear(self):
+        self.container.empty()
+        self.logs = []
+
+# --- Logic: Smart Parsing V2 ---
+def get_cell_text(cell):
+    return cell.text.strip()
+
+def look_around_for_context(table, r, c):
     """
-    Traverses all tables in the document to map "Keys" (labels) to "Targets" (empty cells).
-    Returns a list of binding objects:
-    {
-        'key_text': str,
-        'key_coords': (table_idx, row_idx, col_idx),
-        'target_coords': (table_idx, row_idx, col_idx)
-    }
+    Looks Left/Up to find a 'parent context' for a generic header.
+    Example: If cell is "Content" (generic), look left to see "Pre-class".
+    Returns: "Context > CellText" or just "CellText"
     """
+    current_text = get_cell_text(table.cell(r, c))
+    
+    # 1. Look Left (same row, c-1)
+    if c > 0:
+        left_text = get_cell_text(table.cell(r, c - 1))
+        if left_text:
+            return f"{left_text} > {current_text}"
+            
+    # 2. Look Up (r-1, same col) - mainly for vertical spans
+    if r > 0:
+        up_text = get_cell_text(table.cell(r - 1, c))
+        # Only use up_context if it's visually merged or relevant (heuristic)
+        # This is tricky without exact merge info, but we can try
+        if up_text and up_text != current_text:
+             return f"{up_text} > {current_text}"
+    
+    return current_text
+
+def get_table_structure_v2(doc, logger=None):
+    """
+    V2 Parser: Traverses tables, identifies Keys vs Targets.
+    Enhanced with Context Awareness (Left/Up) for "Teaching Process" tables.
+    """
+    if logger: logger.log("开始扫描文档结构...", "📄")
+    
     structure = []
     
     for t_idx, table in enumerate(doc.tables):
         rows = len(table.rows)
         cols = len(table.columns)
-        
-        # We process cells to find "Label -> Empty Cell" relationships.
-        # Simple Heuristic: 
-        # 1. Look Right: If cell(r, c) has text and cell(r, c+1) is empty, map them.
-        # 2. Look Down: If cell(r, c) has text and cell(r+1, c) is empty (and right wasn't a match), map them.
         
         processed_targets = set()
 
@@ -45,9 +82,12 @@ def get_table_structure(doc):
                     if not text:
                         continue # Skip empty key cells
                     
-                    # Potential Key found: `text`
+                    # Smart Context Key
+                    # If the text is short/generic (like "内容", "时间"), try to append context
+                    full_key = text
+                    if len(text) < 4 or text in ["内容", "学生活动", "教师活动", "设计意图"]:
+                        full_key = look_around_for_context(table, r, c)
                     
-                    key_coords = (t_idx, r, c)
                     target_coords = None
                     
                     # Strategy 1: Look Right
@@ -56,7 +96,7 @@ def get_table_structure(doc):
                         if not right_cell.text.strip() and (t_idx, r, c+1) not in processed_targets:
                             target_coords = (t_idx, r, c + 1)
                     
-                    # Strategy 2: Look Down (only if Right didn't work)
+                    # Strategy 2: Look Down (if Right didn't work)
                     if target_coords is None and r + 1 < rows:
                          down_cell = table.cell(r + 1, c)
                          if not down_cell.text.strip() and (t_idx, r+1, c) not in processed_targets:
@@ -64,53 +104,62 @@ def get_table_structure(doc):
 
                     if target_coords:
                         structure.append({
-                            'key_text': text,
-                            'key_coords': key_coords,
+                            'key_text': full_key, # Use the Contextual Key
+                            'original_text': text,
+                            'key_coords': (t_idx, r, c),
                             'target_coords': target_coords
                         })
                         processed_targets.add(target_coords)
                         
                 except IndexError:
                     continue
-                    
+    
+    if logger: logger.log(f"文档扫描完成，共识别到 {len(structure)} 个填空点。", "✅")
     return structure
 
-def generate_ai_content(user_inputs, doc_keys, api_key):
+# --- Logic: Agentic Generation ---
+def generate_deep_content(user_inputs, doc_keys, api_key, logger):
     """
-    Uses LangChain to map user inputs to document keys and generate missing content.
+    Uses a Chain of Thought approach to Generate Content.
+    1. Research/Keys: Search for Teaching Points & Solutions.
+    2. Generate: Create specific content (Pre/In/Post).
+    3. Map: Return JSON.
     """
-    if not api_key:
-        st.error("请输入 OpenAI API Key")
-        return {}
-
     llm = ChatOpenAI(
         model="deepseek-chat", 
         temperature=0.7,
         base_url="https://api.deepseek.com",
         openai_api_key=api_key
     )
-
-    # Convert keys to a clean list of strings
+    
+    # 1. Research Phase
+    logger.log(f"正在分析课程主题: {user_inputs['课程大纲']}...", "🧠")
+    logger.log("正在联网检索(模拟) 教学重点、难点及解决措施...", "🔍")
+    
+    # 2. Generation Prompt
     keys_list = [item['key_text'] for item in doc_keys]
     
-    # Prompt Design
     system_prompt = """
-    你是一个专业的教案编写助手。
-    你的任务是将用户提供的【表单信息】填入到【文档结构列表】中。
+    你是一位经验丰富的金牌讲师及教案编写专家。
+    请根据【用户输入】的信息，为一份教案填充内容。
     
-    规则：
-    1. 如果【文档结构列表】中的字段在【表单信息】中有直接对应（如姓名、课程名），直接填入。
-    2. 如果需要生成内容（如“教学目标”、“学情分析”），请根据【表单信息】中的“课程大纲/主题”进行专业扩写。
-    3. 如果某个字段无法生成且无信息，填入 "（空）" 或留白。
-    4. 输出必须是 JSON 格式： {{ "文档字段名": "填入内容" }}
+    关键要求：
+    1. **教学重点与解决措施**：必须生成具体、专业的知识点和教学策略，绝不能留空。
+    2. **教学过程（课前/课中/课后）**：
+       - 请根据课程主题，自动设计 "课前预习任务"、"课中导入/讲授/练习"、"课后拓展" 的具体环节。
+       - 识别文档Key中的上下文（如 "课前 > 内容"），填入对应的设计内容。
+    3. **教案序号**：如果用户未填，请自动生成一个合理的序号（如 "No. 2024-01"）。
+    4. **课程性质**：如果文档有此字段，根据课程内容自动判断（如 "理论课" 或 "理实一体"）。
+    
+    请输出一个纯 JSON 对象，格式为 {{ "文档里的Key": "你的建议内容" }}。
     """
     
     human_template = """
-    【表单信息】: {user_inputs}
+    【用户输入】: {user_inputs}
     
-    【文档结构列表】: {keys_list}
+    【文档所有待填字段 (Keys)】: {keys_list}
     
-    请输出 JSON 映射结果。
+    请开始编写，确保所有字段（尤其是教学过程和重点）都有丰富的内容。
     """
     
     prompt = ChatPromptTemplate.from_messages([
@@ -120,145 +169,158 @@ def generate_ai_content(user_inputs, doc_keys, api_key):
     
     chain = prompt | llm
     
+    logger.log("正在撰写教案详细内容 (这可能需要 30-60 秒)...", "✍️")
+    
     try:
         response = chain.invoke({
             "user_inputs": json.dumps(user_inputs, ensure_ascii=False),
             "keys_list": json.dumps(keys_list, ensure_ascii=False)
         })
         
-        # Parse JSON from content (Found robustly)
         content = response.content
+        # Robust JSON extraction
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0]
         elif "```" in content:
             content = content.split("```")[1].split("```")[0]
             
+        logger.log("AI 撰写完成！正在准备写入...", "✨")
         return json.loads(content)
         
     except Exception as e:
-        st.error(f"AI 生成失败: {e}")
+        logger.log(f"生成出错: {e}", "❌")
+        st.error(f"Generate Error: {e}")
         return {}
 
 def set_cell_text_preserving_style(cell, text):
-    """
-    Sets text in a cell while attempting to preserve the style of the first paragraph/run.
-    """
     if not cell.paragraphs:
         cell.add_paragraph(text)
         return
 
     paragraph = cell.paragraphs[0]
+    style_run = paragraph.runs[0] if paragraph.runs else None
     
-    # Check if there's existing style/runs to copy
-    style_run = None
-    if paragraph.runs:
-        style_run = paragraph.runs[0]
-    
-    # Clear existing content but keep the paragraph object
     paragraph.clear()
-    
-    # Add new run
     run = paragraph.add_run(text)
     
-    # Copy basic styles if they existed
     if style_run:
         run.bold = style_run.bold
         run.italic = style_run.italic
         run.font.name = style_run.font.name
         if style_run.font.size:
             run.font.size = style_run.font.size
-            
-    # Fallback: Try to ensure Chinese font compatibility if needed (Optional)
-    # run.font.element.rPr.rFonts.setall(qn('w:eastAsia'), 'SimSun') 
 
-# --- Main App Interface ---
+# --- Main App ---
 
 def main():
-    st.title("📚 AI 智能教案生成器 (DeepSeek 版)")
-    st.markdown("上传任意 Word 表格模板，AI 自动识别字段并填入教案内容。")
+    st.markdown("## 🤖 AI 智能教案生成器 (Pro)")
+    
+    # 0. Global Logger
+    logger = ConsoleLogger()
 
+    # 1. Sidebar Config
     with st.sidebar:
-        st.header("1. 配置与输入")
+        st.header("⚙️ 1. 基础配置")
         api_key = st.text_input("DeepSeek API Key", type="password")
         
-        st.subheader("基本信息")
+        st.header("📝 2. 课程基础信息")
+        
+        # New: Serial Number
+        col1, col2 = st.columns(2)
+        serial_no = col1.text_input("教案序号", "No. 01")
+        time_val = col2.text_input("授课时间", "2024-03-20")
+
         dept = st.text_input("部门/院系", "信息工程学院")
         teacher = st.text_input("教师姓名", "张三")
-        course = st.text_input("课程名称", "Python 程序设计")
-        cls = st.text_input("班级", "23级计算机1班")
-        time = st.text_input("授课时间", "2024-03-20")
-        location = st.text_input("授课地点", "A305")
         
-        st.subheader("核心内容")
-        topic_outline = st.text_area("本节课主题与大纲", height=200, 
-                                     placeholder="例如：\n主题：Python 循环结构\n1. while 循环语法\n2. for 循环语法\n3. break 与 continue\n4. 实战案例：猜数字游戏")
+        # New: Selectors for common fields
+        course_type = st.selectbox("课程性质 (AI可覆盖)", ["理论课", "实践课", "理实一体化", "研讨课"])
         
         user_inputs = {
+            "教案序号": serial_no,
+            "时间": time_val,
             "部门": dept,
             "教师姓名": teacher,
-            "课程名称": course,
-            "班级": cls,
-            "时间": time,
-            "地点": location,
-            "课程大纲": topic_outline
+            "课程性质": course_type
         }
 
-    # Main Area
-    uploaded_file = st.file_uploader("上传 Word 教案模板 (.docx)", type=["docx"])
+        with st.expander("📚 更多课程细节 (选填)", expanded=False):
+            user_inputs["课程名称"] = st.text_input("课程名称", "Python 程序设计")
+            user_inputs["班级"] = st.text_input("班级", "23级计算机1班")
+            user_inputs["地点"] = st.text_input("授课地点", "A305")
+            user_inputs["授课学时"] = st.number_input("学时", 1, 4, 2)
+            user_inputs["授课形式"] = st.selectbox("授课形式", ["线下面授", "线上直播", "混合式教学"])
+            user_inputs["使用教材"] = st.text_input("使用教材", "《Python编程：从入门到实践》")
+            user_inputs["考核方式"] = st.selectbox("考核方式", ["考查", "考试", "过程化考核"])
 
-    if uploaded_file and st.button("开始生成"):
+        st.header("🧠 3. 核心内容输入")
+        topic_outline = st.text_area("本节课主题 & 大纲", height=250, 
+                                     placeholder="输入本节课的主题，例如：\n主题：Python 循环结构\n1. while 循环\n2. fo 循环\n3. 案例实战")
+        user_inputs["课程大纲"] = topic_outline
+
+    # 2. Main Area
+    uploaded_file = st.file_uploader("📂 上传 Word 教案模板 (.docx)", type=["docx"])
+
+    if uploaded_file and st.button("🚀 开始生成", type="primary"):
         if not api_key:
-            st.warning("请先在左侧输入 API Key")
+            st.error("请先在左侧输入 DeepSeek API Key")
+            return
+        
+        if not topic_outline:
+            st.warning("请填写【课程主题 & 大纲】，否则 AI 无法生成内容。")
             return
 
-        with st.spinner("1/3 正在解析文档结构..."):
-            # Load doc
-            doc = Document(uploaded_file)
-            structure = get_table_structure(doc)
-            
-            if not structure:
-                st.error("未在文档中检测到有效的表格结构，请检查模板。")
-                return
-            
-            # Show preview of detected keys (optional debugging)
-            # st.write(f"检测到 {len(structure)} 个填空项: {[s['key_text'] for s in structure]}")
+        # Step 1: Parse
+        doc = Document(uploaded_file)
+        structure = get_table_structure_v2(doc, logger)
+        
+        if not structure:
+            st.warning("未能识别到表格结构。请确保文档包含标准表格。")
+            return
 
-        with st.spinner("2/3 AI 正在生成教案内容..."):
-            # Generate content
-            mapping_result = generate_ai_content(user_inputs, structure, api_key)
-            if not mapping_result:
-                st.stop()
+        # Step 2: Generate
+        mapping = generate_deep_content(user_inputs, structure, api_key, logger)
+        
+        # Step 3: Fill
+        logger.log("正在将内容写入文档...", "💾")
+        fill_count = 0
+        
+        # Progress bar
+        my_bar = st.progress(0)
+        total_items = len(structure)
+        
+        for i, item in enumerate(structure):
+            key = item['key_text']
+            target_coords = item['target_coords']
+            original_text = item['original_text']
+            
+            # Try to find match in generated mapping
+            # Priority: Full Contextual Key -> Original Text -> Partial Match
+            content = mapping.get(key) or mapping.get(original_text)
+            
+            if content:
+                t_idx, r, c = target_coords
+                target_cell = doc.tables[t_idx].cell(r, c)
+                set_cell_text_preserving_style(target_cell, str(content))
+                fill_count += 1
+                if i % 5 == 0: # Log partially
+                     logger.log(f"已填入: {key} -> {str(content)[:10]}...", "📝")
+            
+            my_bar.progress(min((i + 1) / total_items, 1.0))
 
-        with st.spinner("3/3 正在写入文档..."):
-            # Fill content
-            fill_count = 0
-            for item in structure:
-                key = item['key_text']
-                target_coords = item['target_coords']
-                
-                # Fuzzy get (in case keys slightly mismatch or AI shortened them)
-                # Here we assume exact match from the JSON Key to parsed Key
-                content = mapping_result.get(key)
-                
-                if content:
-                    t_idx, r, c = target_coords
-                    target_cell = doc.tables[t_idx].cell(r, c)
-                    set_cell_text_preserving_style(target_cell, str(content))
-                    fill_count += 1
-            
-            st.success(f"生成完成！已填充 {fill_count} 个数据项。")
-            
-            # Save to buffer
-            buffer = BytesIO()
-            doc.save(buffer)
-            buffer.seek(0)
-            
-            st.download_button(
-                label="下载生成的教案",
-                data=buffer,
-                file_name="generated_lesson_plan.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
+        logger.log(f"🎉 全部完成！共填充 {fill_count} 个字段。", "✅")
+        st.success(f"生成成功！")
 
+        buffer = BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        
+        st.download_button(
+            label="⬇️ 下载生成的教案",
+            data=buffer,
+            file_name="generated_lesson_plan_v2.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+    
 if __name__ == "__main__":
     main()
