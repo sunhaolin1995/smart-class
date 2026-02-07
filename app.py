@@ -36,23 +36,23 @@ def get_cell_text(cell):
 
 def look_around_for_context(table, r, c):
     """
-    Looks Left/Up to find a 'parent context' for a generic header.
-    Example: If cell is "Content" (generic), look left to see "Pre-class".
-    Returns: "Context > CellText" or just "CellText"
+    向上/向左查找，为通用标题寻找“父级上下文”。
+    示例：如果单元格是“内容”（通用词），向左查找看到“课前”。
+    返回：“上下文 > 单元格文本” 或 仅“单元格文本”
     """
     current_text = get_cell_text(table.cell(r, c))
     
-    # 1. Look Left (same row, c-1)
+    # 1. 向左查找 (同一行, c-1)
     if c > 0:
         left_text = get_cell_text(table.cell(r, c - 1))
         if left_text:
             return f"{left_text} > {current_text}"
             
-    # 2. Look Up (r-1, same col) - mainly for vertical spans
+    # 2. 向上查找 (r-1, 同一列) - 主要用于垂直合并的单元格
     if r > 0:
         up_text = get_cell_text(table.cell(r - 1, c))
-        # Only use up_context if it's visually merged or relevant (heuristic)
-        # This is tricky without exact merge info, but we can try
+        # 仅当上方文本是视觉合并或相关时使用 (启发式)
+        # 如果没有确切的合并信息，这比较棘手，但我们可以尝试
         if up_text and up_text != current_text:
              return f"{up_text} > {current_text}"
     
@@ -60,8 +60,8 @@ def look_around_for_context(table, r, c):
 
 def get_table_structure_v2(doc, logger=None):
     """
-    V2 Parser: Traverses tables, identifies Keys vs Targets.
-    Enhanced with Context Awareness (Left/Up) for "Teaching Process" tables.
+    V2 解析器：遍历所有表格，识别 Key（字段名）与 Target（填空位置）。
+    针对 "教学过程" 等复杂表格，增强了上下文感知能力 (向左/向上查找)。
     """
     if logger: logger.log("开始扫描文档结构...", "📄")
     
@@ -80,23 +80,23 @@ def get_table_structure_v2(doc, logger=None):
                     text = cell.text.strip()
                     
                     if not text:
-                        continue # Skip empty key cells
+                        continue # 跳过空的 Key 单元格
                     
-                    # Smart Context Key
-                    # If the text is short/generic (like "内容", "时间"), try to append context
+                    # 智能上下文 Key
+                    # 如果文本很短/很通用 (如 "内容", "时间")，尝试追加上下文
                     full_key = text
                     if len(text) < 4 or text in ["内容", "学生活动", "教师活动", "设计意图"]:
                         full_key = look_around_for_context(table, r, c)
                     
                     target_coords = None
                     
-                    # Strategy 1: Look Right
+                    # 策略 1: 向右看
                     if c + 1 < cols:
                         right_cell = table.cell(r, c + 1)
                         if not right_cell.text.strip() and (t_idx, r, c+1) not in processed_targets:
                             target_coords = (t_idx, r, c + 1)
                     
-                    # Strategy 2: Look Down (if Right didn't work)
+                    # 策略 2: 向下看 (如果向右没找到)
                     if target_coords is None and r + 1 < rows:
                          down_cell = table.cell(r + 1, c)
                          if not down_cell.text.strip() and (t_idx, r+1, c) not in processed_targets:
@@ -104,7 +104,7 @@ def get_table_structure_v2(doc, logger=None):
 
                     if target_coords:
                         structure.append({
-                            'key_text': full_key, # Use the Contextual Key
+                            'key_text': full_key, # 使用上下文增强的 Key
                             'original_text': text,
                             'key_coords': (t_idx, r, c),
                             'target_coords': target_coords
@@ -120,10 +120,10 @@ def get_table_structure_v2(doc, logger=None):
 # --- Logic: Agentic Generation ---
 def generate_deep_content(user_inputs, doc_keys, api_key, logger):
     """
-    Uses a Chain of Thought approach to Generate Content.
-    1. Research/Keys: Search for Teaching Points & Solutions.
-    2. Generate: Create specific content (Pre/In/Post).
-    3. Map: Return JSON.
+    使用“思维链”方法生成内容。
+    1. 研究/Key分析：搜索教学重点和解决措施。
+    2. 生成：创建具体内容 (课前/课中/课后)。
+    3. 映射：返回 JSON 格式结果。
     """
     llm = ChatOpenAI(
         model="deepseek-chat", 
@@ -132,11 +132,11 @@ def generate_deep_content(user_inputs, doc_keys, api_key, logger):
         openai_api_key=api_key
     )
     
-    # 1. Research Phase
+    # 1. 研究阶段
     logger.log(f"正在分析课程主题: {user_inputs['课程大纲']}...", "🧠")
     logger.log("正在联网检索(模拟) 教学重点、难点及解决措施...", "🔍")
     
-    # 2. Generation Prompt
+    # 2. 生成 Prompt
     keys_list = [item['key_text'] for item in doc_keys]
     
     system_prompt = """
@@ -178,7 +178,7 @@ def generate_deep_content(user_inputs, doc_keys, api_key, logger):
         })
         
         content = response.content
-        # Robust JSON extraction
+        # 稳健的 JSON 提取
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0]
         elif "```" in content:
