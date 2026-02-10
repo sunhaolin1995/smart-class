@@ -309,7 +309,7 @@ def generate_deep_content_chunked(user_inputs, doc_keys, api_key, logger):
 # --- Main App ---
 
 def main():
-    st.markdown("## 🤖 AI 智能教案生成器 (V16 Flagship)")
+    st.markdown("## 🤖 AI 智能教案生成器 ")
     
     # 0. Global Logger
     logger = ConsoleLogger()
@@ -325,7 +325,7 @@ def main():
         serial_no = col1.text_input("教案序号", "No. 01")
         time_val = col2.text_input("授课时间", "2024-03-20")
 
-        dept = st.text_input("部门/院系", "信息工程学院")
+        dept = st.text_input("部门/院系", "机械技术系")
         teacher = st.text_input("教师姓名", "张三")
         
         course_type = st.selectbox("课程性质 (AI可覆盖)", ["理论课", "实践课", "理实一体化", "研讨课"])
@@ -339,12 +339,12 @@ def main():
         }
 
         with st.expander("📚 更多课程细节 (选填)", expanded=False):
-            user_inputs["课程名称"] = st.text_input("课程名称", "Python 程序设计")
-            user_inputs["班级"] = st.text_input("班级", "23级计算机1班")
-            user_inputs["地点"] = st.text_input("授课地点", "A305")
+            user_inputs["课程名称"] = st.text_input("课程名称", "化工机器")
+            user_inputs["班级"] = st.text_input("班级", "化机 2431")
+            user_inputs["地点"] = st.text_input("授课地点", " 求善楼101")
             user_inputs["授课学时"] = st.number_input("学时", 1, 4, 2)
             user_inputs["授课形式"] = st.selectbox("授课形式", ["线下面授", "线上直播", "混合式教学"])
-            user_inputs["使用教材"] = st.text_input("使用教材", "《Python编程：从入门到实践》")
+            user_inputs["使用教材"] = st.text_input("使用教材", "《化工机器》")
             user_inputs["考核方式"] = st.selectbox("考核方式", ["考查", "考试", "过程化考核"])
 
         st.header("🧠 3. 核心内容输入")
@@ -411,7 +411,7 @@ def main():
             st.download_button(
                 label="⬇️ 下载生成的教案",
                 data=buffer,
-                file_name="generated_lesson_plan_v16.docx",
+                file_name="generated_lesson_plan.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
     
