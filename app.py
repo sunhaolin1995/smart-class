@@ -11,7 +11,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from io import BytesIO
 
 # --- Configuration ---
-st.set_page_config(page_title="AI 智能教案生成器 (V16 Flagship)", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="AI 智能教案生成器 (V16.3 Pro)", layout="wide", initial_sidebar_state="expanded")
 
 # --- UI Components: Console Logger ---
 class ConsoleLogger:
@@ -24,8 +24,10 @@ class ConsoleLogger:
         self.logs.append(f"`{timestamp}` {icon} {message}")
         with self.container.container():
             with st.expander("🖥️ AI 运行终端 (实时日志)", expanded=True):
-                for log in self.logs[-5:]: # Show last 5 logs
-                    st.markdown(log)
+                # height=300 保持窗口可滚动，正序遍历让最新日志在最下方
+                with st.container(height=300, border=False):
+                    for log in self.logs:
+                        st.markdown(log)
     
     def clear(self):
         self.container.empty()
@@ -78,7 +80,7 @@ def get_table_structure(doc, logger=None):
     2. 确保抓取到“课后”和“巩固拓展”。
     3. 全局唯一行号 Key。
     """
-    if logger: logger.log("正在扫描文档结构 (V16 智能版)...", "🔍")
+    if logger: logger.log("正在扫描文档结构...", "🔍")
     
     structure = []
     processed_cell_ids = set() 
@@ -189,14 +191,14 @@ def generate_deep_content_chunked(user_inputs, doc_keys, api_key, logger):
     """
     llm = ChatOpenAI(
         model="deepseek-chat", 
-        temperature=0.7, # 稍微回升温度，让长文写得更好
+        temperature=0.7, 
         base_url="https://api.deepseek.com",
         openai_api_key=api_key
     )
     
     all_keys = [item['key_text'] for item in doc_keys]
     
-    # 【修改点】：增加 Batch Size 到 45，减少分组数量
+    # 增加 Batch Size 到 45，减少分组数量
     BATCH_SIZE = 45
     
     total_batches = math.ceil(len(all_keys) / BATCH_SIZE)
@@ -213,7 +215,6 @@ def generate_deep_content_chunked(user_inputs, doc_keys, api_key, logger):
         
         logger.log(f"正在生成第 {i+1}/{total_batches} 批...", "⏳")
         
-        # --- 核心修改：Prompt 差异化约束 ---
         system_prompt = """
 你是一位顶尖的教案设计专家。请根据课程背景，填写教案空格。
 
@@ -287,7 +288,6 @@ def generate_deep_content_chunked(user_inputs, doc_keys, api_key, logger):
         
         progress_bar.progress((i + 1) / total_batches)
 
-    # 硬逻辑补丁
     logger.log("生成完毕，正在整合数据...", "🧩")
     
     manual_overrides = {
@@ -311,7 +311,10 @@ def generate_deep_content_chunked(user_inputs, doc_keys, api_key, logger):
 def main():
     st.markdown("## 🤖 AI 智能教案生成器 ")
     
-    # 0. Global Logger
+    # 全局变量初始化：确保下载按钮在刷新后依然存在
+    if "generated_doc_buffer" not in st.session_state:
+        st.session_state.generated_doc_buffer = None
+        
     logger = ConsoleLogger()
 
     # 1. Sidebar Config
@@ -323,10 +326,10 @@ def main():
         
         col1, col2 = st.columns(2)
         serial_no = col1.text_input("教案序号", "No. 01")
-        time_val = col2.text_input("授课时间", "2024-03-20")
+        time_val = col2.text_input("授课时间", "2024-03-25")
 
-        dept = st.text_input("部门/院系", "机械技术系")
-        teacher = st.text_input("教师姓名", "张三")
+        dept = st.text_input("部门/院系", "机电工程学院")
+        teacher = st.text_input("教师姓名", "李工")
         
         course_type = st.selectbox("课程性质 (AI可覆盖)", ["理论课", "实践课", "理实一体化", "研讨课"])
         
@@ -339,81 +342,95 @@ def main():
         }
 
         with st.expander("📚 更多课程细节 (选填)", expanded=False):
-            user_inputs["课程名称"] = st.text_input("课程名称", "化工机器")
-            user_inputs["班级"] = st.text_input("班级", "化机 2431")
-            user_inputs["地点"] = st.text_input("授课地点", " 求善楼101")
+            user_inputs["课程名称"] = st.text_input("课程名称", "机械制图")
+            user_inputs["班级"] = st.text_input("班级", "23级数控技术2班")
+            user_inputs["地点"] = st.text_input("授课地点", "求善楼 301")
             user_inputs["授课学时"] = st.number_input("学时", 1, 4, 2)
             user_inputs["授课形式"] = st.selectbox("授课形式", ["线下面授", "线上直播", "混合式教学"])
-            user_inputs["使用教材"] = st.text_input("使用教材", "《化工机器》")
+            user_inputs["使用教材"] = st.text_input("使用教材", "《机械制图与CAD》")
             user_inputs["考核方式"] = st.selectbox("考核方式", ["考查", "考试", "过程化考核"])
 
         st.header("🧠 3. 核心内容输入")
         topic_outline = st.text_area("本节课主题 & 大纲", height=250, 
-                                     placeholder="输入本节课的主题，例如：\n主题：Python 循环结构\n1. while 循环\n2. fo 循环\n3. 案例实战")
+                                     placeholder="输入本节课的主题，例如：\n主题：组合体三视图的画法\n1. 形体分析法与线面分析法\n2. 叠加类与切割类组合体画法\n3. 尺寸标注的基本规则")
         user_inputs["课程大纲"] = topic_outline
 
     # 2. Main Area
     uploaded_file = st.file_uploader("📂 上传 Word 教案模板 (.docx)", type=["docx"])
 
-    if uploaded_file and st.button("🚀 开始生成", type="primary"):
-        if not api_key:
-            st.error("请先在左侧输入 DeepSeek API Key")
-            return
-        
-        if not topic_outline:
-            st.warning("请填写【课程主题 & 大纲】，否则 AI 无法生成内容。")
-            return
+    # 使用占位符动态切换按钮状态
+    btn_placeholder = st.empty()
 
-        # Step 1: Parse
-        doc = Document(uploaded_file)
-        structure = get_table_structure(doc, logger)
-        
-        if not structure:
-            st.warning("未能识别到表格结构。请确保文档包含标准表格。")
-            return
-
-        # Step 2: Generate (V16)
-        mapping = generate_deep_content_chunked(user_inputs, structure, api_key, logger)
-        
-        # Step 3: Fill
-        if mapping:
-            logger.log("正在将内容写入文档...", "💾")
-            fill_count = 0
+    if uploaded_file:
+        if btn_placeholder.button("🚀 开始生成", type="primary"):
             
-            # Progress bar for filling
-            my_bar = st.progress(0)
-            total_items = len(structure)
+            # 清空旧下载数据并置灰按钮
+            st.session_state.generated_doc_buffer = None
+            btn_placeholder.button("⏳ 正在全力生成中... 请勿点击或刷新页面", type="primary", disabled=True)
             
-            for i, item in enumerate(structure):
-                key = item['key_text']
-                target_coords = item['target_coords']
-                original_text = item['original_text']
-                
-                content = mapping.get(key) or mapping.get(original_text)
-                
-                if content:
-                    t_idx, r, c = target_coords
-                    target_cell = doc.tables[t_idx].cell(r, c)
-                    set_cell_text_preserving_style(target_cell, str(content))
-                    fill_count += 1
-                    if i % 10 == 0: 
-                        logger.log(f"已填入: {key} -> {str(content)[:10]}...", "📝")
-                
-                my_bar.progress(min((i + 1) / total_items, 1.0))
-
-            logger.log(f"🎉 全部完成！共填充 {fill_count} 个字段。", "✅")
-            st.success(f"生成成功！")
-
-            buffer = BytesIO()
-            doc.save(buffer)
-            buffer.seek(0)
+            if not api_key:
+                st.error("请先在左侧输入 DeepSeek API Key")
+                st.stop()
             
-            st.download_button(
-                label="⬇️ 下载生成的教案",
-                data=buffer,
-                file_name="generated_lesson_plan.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
+            if not topic_outline:
+                st.warning("请填写【课程主题 & 大纲】，否则 AI 无法生成内容。")
+                st.stop()
+
+            # Step 1: Parse
+            doc = Document(uploaded_file)
+            structure = get_table_structure(doc, logger)
+            
+            if not structure:
+                st.warning("未能识别到表格结构。请确保文档包含标准表格。")
+                st.stop()
+
+            # Step 2: Generate
+            mapping = generate_deep_content_chunked(user_inputs, structure, api_key, logger)
+            
+            # Step 3: Fill
+            if mapping:
+                logger.log("正在将内容写入文档...", "💾")
+                fill_count = 0
+                
+                my_bar = st.progress(0)
+                total_items = len(structure)
+                
+                for i, item in enumerate(structure):
+                    key = item['key_text']
+                    target_coords = item['target_coords']
+                    original_text = item['original_text']
+                    
+                    content = mapping.get(key) or mapping.get(original_text)
+                    
+                    if content:
+                        t_idx, r, c = target_coords
+                        target_cell = doc.tables[t_idx].cell(r, c)
+                        set_cell_text_preserving_style(target_cell, str(content))
+                        fill_count += 1
+                        if i % 10 == 0: 
+                            logger.log(f"已填入: {key} -> {str(content)[:10]}...", "📝")
+                    
+                    my_bar.progress(min((i + 1) / total_items, 1.0))
+
+                logger.log(f"🎉 全部完成！共填充 {fill_count} 个字段。", "✅")
+                st.success(f"生成成功！向下滚动下载您的教案。")
+
+                # 保存到缓存
+                buffer = BytesIO()
+                doc.save(buffer)
+                buffer.seek(0)
+                st.session_state.generated_doc_buffer = buffer.getvalue()
+                
+                # 恢复按钮状态
+                btn_placeholder.button("🚀 重新生成", type="primary")
+
+    if st.session_state.generated_doc_buffer is not None:
+        st.download_button(
+            label="⬇️ 下载生成的教案 (.docx)",
+            data=st.session_state.generated_doc_buffer,
+            file_name="AI_generated_lesson_plan.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
     
 if __name__ == "__main__":
     main()
