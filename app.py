@@ -326,10 +326,10 @@ def main():
         
         col1, col2 = st.columns(2)
         serial_no = col1.text_input("教案序号", "No. 01")
-        time_val = col2.text_input("授课时间", "2024-03-25")
+        time_val = col2.text_input("授课时间", "202 6-03-02")
 
-        dept = st.text_input("部门/院系", "机电工程学院")
-        teacher = st.text_input("教师姓名", "李工")
+        dept = st.text_input("部门/院系", "机械技术系")
+        teacher = st.text_input("教师姓名", "孙工")
         
         course_type = st.selectbox("课程性质 (AI可覆盖)", ["理论课", "实践课", "理实一体化", "研讨课"])
         
